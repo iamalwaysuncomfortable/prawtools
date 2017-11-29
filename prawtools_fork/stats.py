@@ -6,23 +6,25 @@ from tempfile import mkstemp
 import codecs
 import gc
 import logging
+import sys
 import os
 import re
 import time
-
-
 from praw import Reddit
 from prawcore.exceptions import RequestException
 from six import iteritems, text_type as tt
-
 from .helpers import AGENT, arg_parser, check_for_updates
+###CUSTOM LOGGING FOR ALTCOIN APPLICATION
+import log_service.logger_factory as lf
+logger = lf.get_loggly_logger(__name__)
 
 SECONDS_IN_A_DAY = 60 * 60 * 24
 RE_WHITESPACE = re.compile(r'\s+')
 TOP_VALUES = {'all', 'day', 'month', 'week', 'year'}
+TOP_VALS_IN_SECONDS = {'day':SECONDS_IN_A_DAY, 'week':SECONDS_IN_A_DAY*7, 'month':SECONDS_IN_A_DAY*30, 'year':
+                       SECONDS_IN_A_DAY*365}
 
-logger = logging.getLogger(__package__)
-
+#logger = logging.getLogger(__package__)
 
 class MiniComment(object):
     """Provides a memory optimized version of a Comment."""
@@ -58,7 +60,7 @@ class SubredditStats(object):
     """Contain all the functionality of the subreddit_stats command."""
 
     post_footer = tt('>Generated with [BBoe](/u/bboe)\'s [Subreddit Stats]'
-                     '(https://github.com/praw-dev/prawtools) '
+                     '(https://github.com/praw-dev/prawtools_fork) '
                      '([Donate](https://cash.me/$praw))')
     post_header = tt('---\n###{}\n')
     post_prefix = tt('Subreddit Stats:')
@@ -106,37 +108,84 @@ class SubredditStats(object):
         self.reddit = (reddit or
                        Reddit(site, check_for_updates=False, user_agent=AGENT))
         self.submissions = {}
+        self.subreddit_statistics = {}
         self.submitters = defaultdict(list)
+        self.subreddit_name = subreddit
         self.submit_subreddit = self.reddit.subreddit('subreddit_stats')
         self.subreddit = self.reddit.subreddit(subreddit)
+        self.collection_interval = None
 
-    def basic_stats(self):
+    def __reset__(self, subreddit):
+        self.commenters = defaultdict(list)
+        self.comments = []
+        self.min_date = 0
+        self.max_date = time.time() - SECONDS_IN_A_DAY
+        self.submissions = {}
+        self.subreddit_statistics = {}
+        self.submitters = defaultdict(list)
+        self.subreddit_name = subreddit
+        self.subreddit = self.reddit.subreddit(subreddit)
+        self.collection_interval = None
+        self.collection_start_time = None
+        gc.collect()
+
+    def basic_stats(self, stats_only=True, tuple_format=True):
         """Return a markdown representation of simple statistics."""
+
         comment_score = sum(comment.score for comment in self.comments)
         if self.comments:
             comment_duration = (self.comments[-1].created_utc -
                                 self.comments[0].created_utc)
-            comment_rate = self._rate(len(self.comments), comment_duration)
+            if self.collection_interval in TOP_VALUES and self.collection_interval is not "all":
+                request_duration = TOP_VALS_IN_SECONDS[self.collection_interval]
+                comment_rate = self._rate(len(self.comments), request_duration)
+            else:
+                comment_rate = self._rate(len(self.comments), comment_duration)
+
         else:
             comment_rate = 0
 
+        if not isinstance(self.collection_start_time, int):
+            error_msg = "Collection start time variable not initialized correctly"
+            logging.error(error_msg)
+            raise AttributeError(error_msg)
+
         submission_duration = self.max_date - self.min_date
-        submission_rate = self._rate(len(self.submissions),
-                                     submission_duration)
+        if self.collection_interval in TOP_VALUES and self.collection_interval is not "all":
+            request_duration = TOP_VALS_IN_SECONDS[self.collection_interval]
+            submission_rate = self._rate(len(self.submissions), request_duration)
+        else:
+            submission_rate = self._rate(len(self.submissions), submission_duration)
         submission_score = sum(sub.score for sub in self.submissions.values())
+        if tuple_format == True:
+            stats_data = (self.subreddit_name, self.collection_interval, self.collection_start_time, int(self.min_date),
+                          int(self.max_date), int(submission_duration), comment_score, int(comment_rate),
+                          submission_score, int(submission_rate), len(self.comments), len(self.commenters),
+                          len(self.submissions), len(self.submitters))
+        else:
+            stats_data = {"subreddit":self.subreddit_name, "collection_interval":self.collection_interval,
+                          "collection_start_time":self.collection_start_time ,"min_date":int(self.min_date),
+                          "max_date":int(self.max_date),"comment_rate":int(comment_rate), "comment_score":comment_score,
+                          "submission_interval":int(submission_duration), "submission_score": submission_score,
+                          "submission_rate": int(submission_rate),"num_comments": len(self.comments),
+                          "num_commenters": len(self.commenters), "num_submissions": len(self.submissions),
+                          "num_submitters": len(self.submitters), "measurement_period":self.collection_interval}
 
-        values = [('Total', len(self.submissions), len(self.comments)),
-                  ('Rate (per day)', '{:.2f}'.format(submission_rate),
-                   '{:.2f}'.format(comment_rate)),
-                  ('Unique Redditors', len(self.submitters),
-                   len(self.commenters)),
-                  ('Combined Score', submission_score, comment_score)]
+        if stats_only == True:
+            return stats_data
+        else:
+            values = [('Total', len(self.submissions), len(self.comments)),
+                      ('Rate (per day)', '{:.2f}'.format(submission_rate),
+                       '{:.2f}'.format(comment_rate)),
+                      ('Unique Redditors', len(self.submitters),
+                       len(self.commenters)),
+                      ('Combined Score', submission_score, comment_score)]
 
-        retval = 'Period: {:.2f} days\n\n'.format(submission_duration / 86400.)
-        retval += '||Submissions|Comments|\n:-:|--:|--:\n'
-        for quad in values:
-            retval += '__{}__|{}|{}\n'.format(*quad)
-        return retval + '\n'
+            retval = 'Period: {:.2f} days\n\n'.format(submission_duration / 86400.)
+            retval += '||Submissions|Comments|\n:-:|--:|--:\n'
+            for quad in values:
+                retval += '__{}__|{}|{}\n'.format(*quad)
+            return retval + '\n'
 
     def fetch_recent_submissions(self, max_duration):
         """Fetch recent submissions in subreddit with boundaries.
@@ -179,6 +228,7 @@ class SubredditStats(object):
         :returns: True if any submissions were found.
 
         """
+
         for submission in self.subreddit.top(limit=None, time_filter=top):
             self.submissions[submission.id] = MiniSubmission(submission)
 
@@ -225,7 +275,17 @@ class SubredditStats(object):
                                       submission.distinguished is None):
                 self.submitters[submission.author].append(submission)
 
-    def publish_results(self, view, submitters, commenters):
+    def process_submission_stats(self):
+        """Return data from top submissions."""
+        num = len(self.submissions)
+        if num <= 0:
+            return []
+        st = self.collection_start_time
+        submissions =  [(s_id, st, x.title, self.subreddit_name, x.score, x.num_comments, int(x.created_utc), x.author)
+            for s_id, x in self.submissions.iteritems() if self.distinguished or x.distinguished is None]
+        return submissions
+
+    def publish_results(self, view, submitters, commenters, publish_externally=False):
         """Submit the results to the subreddit. Has no return value (None)."""
         def timef(timestamp, date_only=False):
             """Return a suitable string representaation of the timestamp."""
@@ -236,39 +296,54 @@ class SubredditStats(object):
                 retval = dtime.strftime('%Y-%m-%d %H:%M PDT')
             return retval
 
-        basic = self.basic_stats()
-        top_commenters = self.top_commenters(commenters)
-        top_comments = self.top_comments()
-        top_submissions = self.top_submissions()
+        if publish_externally==False:
+            basic = self.basic_stats(stats_only=True)
+            submissions = self.process_submission_stats()
 
-        # Decrease number of top submitters if body is too large.
-        body = None
-        while body is None or len(body) > 40000 and submitters > 0:
-            body = (basic + self.top_submitters(submitters) + top_commenters
-                    + top_submissions + top_comments + self.post_footer)
-            submitters -= 1
+            natural_language_data = {"submissions":submissions}
+            subreddit_statistics = {"numerical_stats":basic, "subreddit_name":self.subreddit_name,
+                                    "natural_language_data":natural_language_data, "time_recorded":time.time()}
+            self.subreddit_statistics = subreddit_statistics
+            return subreddit_statistics
 
-        title = '{} {} {}posts from {} to {}'.format(
-            self.post_prefix, str(self.subreddit),
-            'top ' if view in TOP_VALUES else '', timef(self.min_date, True),
-            timef(self.max_date))
 
-        try:  # Attempt to make the submission
-            return self.submit_subreddit.submit(title, selftext=body)
-        except Exception:
-            logger.exception('Failed to submit to {}'
-                             .format(self.submit_subreddit))
-            self._save_report(title, body)
+        def publish_to_subbreddit(submitters):
+            basic = self.basic_stats()
+            top_commenters = self.top_commenters(commenters)
+            top_comments = self.top_comments()
+            top_submissions = self.top_submissions()
+            # Decrease number of top submitters if body is too large.
+            body = None
+            while body is None or len(body) > 40000 and submitters > 0:
+                body = (basic + self.top_submitters(submitters) + top_commenters
+                        + top_submissions + top_comments + self.post_footer)
+                submitters -= 1
+
+            title = '{} {} {}posts from {} to {}'.format(
+                self.post_prefix, str(self.subreddit),
+                'top ' if view in TOP_VALUES else '', timef(self.min_date, True),
+                timef(self.max_date))
+
+            try:  # Attempt to make the submission
+                return self.submit_subreddit.submit(title, selftext=body)
+            except Exception:
+                logger.exception('Failed to submit to {}'
+                                 .format(self.submit_subreddit))
+                self._save_report(title, body)
+        if publish_externally == True:
+            publish_to_subbreddit(submitters)
 
     def run(self, view, submitters, commenters):
         """Run stats and return the created Submission."""
         logger.info('Analyzing subreddit: {}'.format(self.subreddit))
-
+        self.collection_interval = view
+        self.collection_start_time = int(time.time())
         if view in TOP_VALUES:
             callback = self.fetch_top_submissions
         else:
             callback = self.fetch_recent_submissions
             view = int(view)
+
         self.fetch_submissions(callback, view)
 
         if not self.submissions:
@@ -277,16 +352,22 @@ class SubredditStats(object):
 
         return self.publish_results(view, submitters, commenters)
 
-    def top_commenters(self, num):
+    def top_commenters(self, num, give_list=False):
         """Return a markdown representation of the top commenters."""
         num = min(num, len(self.commenters))
         if num <= 0:
-            return ''
+            if give_list == True:
+                return []
+            else:
+                return ''
 
         top_commenters = sorted(
             iteritems(self.commenters),
             key=lambda x: (-sum(y.score for y in x[1]),
                            -len(x[1]), str(x[0])))[:num]
+
+        if give_list == True:
+            return top_commenters
 
         retval = self.post_header.format('Top Commenters')
         for author, comments in top_commenters:
@@ -296,16 +377,21 @@ class SubredditStats(object):
                 len(comments), 's' if len(comments) != 1 else '')
         return '{}\n'.format(retval)
 
-    def top_submitters(self, num):
+    def top_submitters(self, num, give_list=False):
         """Return a markdown representation of the top submitters."""
         num = min(num, len(self.submitters))
         if num <= 0:
-            return ''
+            if give_list == True:
+                return []
+            else:
+                return ''
 
         top_submitters = sorted(
             iteritems(self.submitters),
             key=lambda x: (-sum(y.score for y in x[1]),
                            -len(x[1]), str(x[0])))[:num]
+        if give_list == True:
+            return top_submitters
 
         retval = self.post_header.format('Top Submitters\' Top Submissions')
         for (author, submissions) in top_submitters:
@@ -327,7 +413,7 @@ class SubredditStats(object):
             retval += '\n'
         return retval
 
-    def top_submissions(self):
+    def top_submissions(self, give_list=False):
         """Return a markdown representation of the top submissions."""
         num = min(10, len(self.submissions))
         if num <= 0:
@@ -339,7 +425,13 @@ class SubredditStats(object):
             key=lambda x: (-x.score, -x.num_comments, x.title))[:num]
 
         if not top_submissions:
-            return ''
+            if give_list == True:
+                return top_submissions
+            else:
+                return ''
+
+        if give_list == True:
+            return top_submissions
 
         retval = self.post_header.format('Top Submissions')
         for sub in top_submissions:
@@ -355,14 +447,21 @@ class SubredditStats(object):
                 self._permalink(sub))
         return tt('{}\n').format(retval)
 
-    def top_comments(self):
+    def top_comments(self, give_list=False):
         """Return a markdown representation of the top comments."""
         num = min(10, len(self.comments))
         if num <= 0:
-            return ''
+            if give_list == True:
+                return []
+            else:
+                return ''
 
         top_comments = sorted(
             self.comments, key=lambda x: (-x.score, str(x.author)))[:num]
+
+        if give_list == True:
+            return top_comments
+
         retval = self.post_header.format('Top Comments')
         for comment in top_comments:
             title = self._safe_title(comment.submission)

@@ -6,7 +6,7 @@ from os import path
 from setuptools import setup
 
 
-PACKAGE_NAME = 'prawtools'
+PACKAGE_NAME = 'prawtools_fork'
 HERE = path.abspath(path.dirname(__file__))
 with open(path.join(HERE, 'README.md'), encoding='utf-8') as fp:
     README = fp.read()
@@ -31,9 +31,9 @@ setup(name=PACKAGE_NAME,
                    'Topic :: Utilities'],
       description='A collection of utilities that utilize the reddit API.',
       entry_points={
-          'console_scripts': ['modutils = prawtools.mod:main',
-                              'reddit_alert = prawtools.alert:main',
-                              'subreddit_stats = prawtools.stats:main']},
+          'console_scripts': ['modutils = prawtools_fork.mod:main',
+                              'reddit_alert = prawtools_fork.alert:main',
+                              'subreddit_stats = prawtools_fork.stats:main']},
       install_requires=['praw >=4.0.0, <5', 'six >=1, <2'],
       keywords='reddit mod moderator subreddit statistics tools',
       license='Simplified BSD License',
@@ -43,5 +43,5 @@ setup(name=PACKAGE_NAME,
       tests_require=['betamax >=0.7.1, <0.8',
                      'betamax-serializers >=0.2.0, <0.3',
                      'mock ==1.0.1'],
-      url='https://github.com/praw-dev/prawtools',
+      url='https://github.com/praw-dev/prawtools_fork',
       version=VERSION)

@@ -5,7 +5,7 @@ from betamax import Betamax
 
 
 class IntegrationTest(unittest.TestCase):
-    """Base class for prawtools integration tests."""
+    """Base class for prawtools_fork integration tests."""
 
     def setUp(self, http):
         """Setup runs before all test cases."""

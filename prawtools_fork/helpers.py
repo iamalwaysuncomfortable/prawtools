@@ -6,14 +6,14 @@ from update_checker import update_check
 from . import __version__
 
 
-AGENT = 'prawtools/{}'.format(__version__)
+AGENT = 'prawtools_fork/{}'.format(__version__)
 
 
 def arg_parser(*args, **kwargs):
-    """Return a parser with common options used in the prawtools commands."""
+    """Return a parser with common options used in the prawtools_fork commands."""
     msg = {
         'site': 'The site to connect to defined in your praw.ini file.',
-        'update': 'Prevent the checking for prawtools package updates.'}
+        'update': 'Prevent the checking for prawtools_fork package updates.'}
 
     kwargs['version'] = 'BBoe\'s PRAWtools {}'.format(__version__)
     parser = OptionParser(*args, **kwargs)
@@ -32,4 +32,4 @@ def arg_parser(*args, **kwargs):
 def check_for_updates(options):
     """Check for package updates."""
     if not options.disable_update_check:  # Check for updates
-        update_check('prawtools', __version__)
+        update_check('prawtools_fork', __version__)

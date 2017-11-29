@@ -1,6 +1,6 @@
 """Test subreddit_stats."""
 import mock
-from prawtools.stats import SubredditStats
+from prawtools_fork.stats import SubredditStats
 
 from . import IntegrationTest
 
