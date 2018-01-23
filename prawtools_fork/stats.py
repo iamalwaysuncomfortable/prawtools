@@ -6,6 +6,7 @@ from tempfile import mkstemp
 import codecs
 import gc
 import logging
+import requests
 import sys
 import os
 import re
@@ -66,6 +67,16 @@ class SubredditStats(object):
     post_prefix = tt('Subreddit Stats:')
 
     @staticmethod
+    def get_http(uri, parameters=None, max_retries=5, headers={'User-Agent': 'Mozilla/57.0 (Macintosh; '
+        'Intel Mac OS X 10_10_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36'}):
+        """ Get data from API or download HTML, try each URI 5 times """
+        with requests.Session() as s:
+            a = requests.adapters.HTTPAdapter(max_retries)
+            s.mount('https://', a)
+            response = s.get(uri, params=parameters, headers=headers)
+        return response
+
+    @staticmethod
     def _permalink(item):
         if isinstance(item, MiniSubmission):
             return tt('/comments/{}').format(item.id)
@@ -98,15 +109,19 @@ class SubredditStats(object):
     def _user(user):
         return '_deleted_' if user is None else tt('/u/{}').format(user)
 
-    def __init__(self, subreddit, site, distinguished, reddit=None):
+    def __init__(self, subreddit, site, distinguished, user_agent=None, reddit=None):
         """Initialize the SubredditStats instance with config options."""
         self.commenters = defaultdict(list)
         self.comments = []
         self.distinguished = distinguished
         self.min_date = 0
         self.max_date = time.time() - SECONDS_IN_A_DAY
+        if isinstance(user_agent, dict):
+            self.user_agent = user_agent
+        else:
+            self.user_agent = AGENT
         self.reddit = (reddit or
-                       Reddit(site, check_for_updates=False, user_agent=AGENT))
+                       Reddit(site, check_for_updates=False, user_agent=self.user_agent))
         self.submissions = {}
         self.subreddit_statistics = {}
         self.submitters = defaultdict(list)
@@ -157,11 +172,17 @@ class SubredditStats(object):
         else:
             submission_rate = self._rate(len(self.submissions), submission_duration)
         submission_score = sum(sub.score for sub in self.submissions.values())
+        subscribers, active_users = None, None
+        try:
+            subscribers, active_users = self.fetch_wiki_data(self.subreddit_name, header=self.user_agent)
+        except Exception as e:
+            error_msg = ("error in fetching wiki data, error message was %s") % str(e)
+            logging.warn(error_msg)
         if tuple_format == True:
             stats_data = (self.subreddit_name, self.collection_interval, self.collection_start_time, int(self.min_date),
                           int(self.max_date), int(submission_duration), comment_score, int(comment_rate),
                           submission_score, int(submission_rate), len(self.comments), len(self.commenters),
-                          len(self.submissions), len(self.submitters))
+                          len(self.submissions), len(self.submitters), subscribers, active_users)
         else:
             stats_data = {"subreddit":self.subreddit_name, "collection_interval":self.collection_interval,
                           "collection_start_time":self.collection_start_time ,"min_date":int(self.min_date),
@@ -169,8 +190,8 @@ class SubredditStats(object):
                           "submission_interval":int(submission_duration), "submission_score": submission_score,
                           "submission_rate": int(submission_rate),"num_comments": len(self.comments),
                           "num_commenters": len(self.commenters), "num_submissions": len(self.submissions),
-                          "num_submitters": len(self.submitters), "measurement_period":self.collection_interval}
-
+                          "num_submitters": len(self.submitters), "measurement_period":self.collection_interval,
+                          "subscribers":subscribers, "active_users":active_users}
         if stats_only == True:
             return stats_data
         else:
@@ -221,6 +242,13 @@ class SubredditStats(object):
         self.process_submitters()
         self.process_commenters()
 
+    def fetch_wiki_data(self, subreddit, header):
+        wiki_url = "https://www.reddit.com/r/" + subreddit + "/about/.json"
+        wiki_data = self.get_http(wiki_url, headers=header)
+        if wiki_data.status_code == 200:
+            wiki_data = wiki_data.json()
+            return wiki_data["data"]["subscribers"], wiki_data["data"]["active_user_count"]
+
     def fetch_top_submissions(self, top):
         """Fetch top submissions by some top value.
 
@@ -228,7 +256,6 @@ class SubredditStats(object):
         :returns: True if any submissions were found.
 
         """
-
         for submission in self.subreddit.top(limit=None, time_filter=top):
             self.submissions[submission.id] = MiniSubmission(submission)
 
